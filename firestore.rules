@@ -1,0 +1,171 @@
+rules_version = '2';
+
+// Vaulta security rules.
+// One signed-in, email-verified club account == one club (clubId == auth uid).
+// Hiding a button is not security: everything below is enforced by Firebase.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+    function isClub(clubId) {
+      return signedIn() && request.auth.uid == clubId;
+    }
+    function validAmount(v) {
+      // integer paise, > 0, below ₹1,00,00,000
+      return v is int && v > 0 && v <= 1000000000;
+    }
+    function nonEmptyString(v, max) {
+      return v is string && v.size() > 0 && v.size() <= max;
+    }
+    // Event reimbursement: a yes/no flag plus an integer amount in paise.
+    function validReimb(d) {
+      return d.reimbursementAvailable is bool
+        && d.reimbursementAmount is int
+        && d.reimbursementAmount >= 0
+        && d.reimbursementAmount <= 1000000000
+        && (d.reimbursementAvailable == true || d.reimbursementAmount == 0);
+    }
+
+    // ---------- Club profile ----------
+    match /clubs/{clubId} {
+      allow read: if isClub(clubId);
+      allow create: if isClub(clubId)
+        && request.resource.data.keys().hasOnly(
+             ['name', 'email', 'totalBudget', 'categories', 'members', 'createdAt'])
+        && nonEmptyString(request.resource.data.name, 80)
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.totalBudget == 0
+        && request.resource.data.createdAt == request.time;
+      allow update: if isClub(clubId)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.totalBudget is int
+        && request.resource.data.totalBudget >= 0
+        && request.resource.data.categories is list
+        && request.resource.data.members is list;
+      allow delete: if false;
+
+      // ---------- Events (never deleted) ----------
+      match /events/{eventId} {
+        allow read: if isClub(clubId);
+        allow create: if isClub(clubId)
+          && nonEmptyString(request.resource.data.name, 80)
+          && validReimb(request.resource.data)
+          && request.resource.data.createdAt == request.time;
+        allow update: if isClub(clubId)
+          && request.resource.data.createdAt == resource.data.createdAt
+          && nonEmptyString(request.resource.data.name, 80)
+          && validReimb(request.resource.data);
+        allow delete: if false;
+      }
+
+      // ---------- Bills ----------
+      match /bills/{billId} {
+        allow read: if isClub(clubId);
+
+        allow create: if isClub(clubId)
+          && request.resource.data.keys().hasAll(
+               ['eventId', 'amount', 'reason', 'date', 'doneBy', 'status',
+                'createdAt', 'updatedAt'])
+          && request.resource.data.status == 'active'
+          && validAmount(request.resource.data.amount)
+          && nonEmptyString(request.resource.data.reason, 200)
+          && nonEmptyString(request.resource.data.doneBy, 60)
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+
+        // Voided bills are frozen: only active bills can be updated.
+        allow update: if isClub(clubId)
+          && resource.data.status == 'active'
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.updatedAt == request.time
+          && validAmount(request.resource.data.amount)
+          && request.resource.data.status in ['active', 'void']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+               ['eventId', 'eventName', 'amount', 'reason', 'paidTo', 'category',
+                'date', 'receiptId', 'receiptName', 'doneBy', 'status',
+                'voidReason', 'voidedAt', 'updatedAt']);
+
+        // Permanent deletion is disabled.
+        allow delete: if false;
+
+        // Append-only audit log.
+        match /history/{historyId} {
+          allow read: if isClub(clubId);
+          allow create: if isClub(clubId)
+            && request.resource.data.action in ['create', 'edit', 'void']
+            && nonEmptyString(request.resource.data.by, 60)
+            && request.resource.data.at == request.time;
+          allow update, delete: if false;
+        }
+      }
+
+      // ---------- Income ----------
+      match /income/{incomeId} {
+        allow read: if isClub(clubId);
+        allow create: if isClub(clubId)
+          && request.resource.data.status == 'active'
+          && validAmount(request.resource.data.amount)
+          && nonEmptyString(request.resource.data.source, 120)
+          && nonEmptyString(request.resource.data.doneBy, 60)
+          && request.resource.data.createdAt == request.time;
+        // Income can only be voided, never edited or deleted.
+        allow update: if isClub(clubId)
+          && resource.data.status == 'active'
+          && request.resource.data.status == 'void'
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['status', 'voidReason', 'voidedAt']);
+        allow delete: if false;
+      }
+
+      // ---------- Reimbursement money received (per event) ----------
+      // Append-only: can be recorded, then only voided. Must point at a real event.
+      match /reimbursements/{entryId} {
+        allow read: if isClub(clubId);
+        allow create: if isClub(clubId)
+          && request.resource.data.status == 'active'
+          && validAmount(request.resource.data.amount)
+          && nonEmptyString(request.resource.data.doneBy, 60)
+          && request.resource.data.eventId is string
+          && exists(/databases/$(database)/documents/clubs/$(clubId)/events/$(request.resource.data.eventId))
+          && request.resource.data.createdAt == request.time;
+        allow update: if isClub(clubId)
+          && resource.data.status == 'active'
+          && request.resource.data.status == 'void'
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['status', 'voidReason', 'voidedAt']);
+        allow delete: if false;
+      }
+
+      // ---------- Receipts (stored in Firestore: free plan, no Storage needed) ----------
+      // Immutable: can be created and read, never changed or deleted.
+      match /receipts/{receiptId} {
+        allow read: if isClub(clubId);
+        allow create: if isClub(clubId)
+          && request.resource.data.data is bytes
+          && request.resource.data.data.size() <= 716800
+          && request.resource.data.contentType in ['image/jpeg', 'application/pdf']
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
+
+      // ---------- Budget change log (append-only) ----------
+      match /budgetLog/{logId} {
+        allow read: if isClub(clubId);
+        allow create: if isClub(clubId)
+          && request.resource.data.newBudget is int
+          && request.resource.data.newBudget >= 0
+          && nonEmptyString(request.resource.data.by, 60)
+          && request.resource.data.at == request.time;
+        allow update, delete: if false;
+      }
+    }
+
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

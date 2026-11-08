@@ -1,0 +1,7 @@
+/// Copy this file to `google_config.dart` (same folder) and paste your *Web client ID*.
+/// `google_config.dart` is git-ignored, so your ID never gets committed.
+///
+/// Where to find it: Firebase console -> Authentication -> Sign-in method -> Google
+/// -> "Web SDK configuration" -> Web client ID  (looks like 1234-abc.apps.googleusercontent.com).
+/// Google sign-in in the browser (Chrome) does not need it.
+const googleServerClientId = 'PASTE_WEB_CLIENT_ID.apps.googleusercontent.com';

@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  analyze-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # The real config files are git-ignored, so create harmless stand-ins for the build.
+      - name: Create local config stand-ins
+        run: |
+          [ -f lib/firebase_options.dart ] || cp lib/firebase_options.dart.example lib/firebase_options.dart
+          [ -f lib/core/constants/google_config.dart ] || cp lib/core/constants/google_config.dart.example lib/core/constants/google_config.dart
+
+      - run: flutter pub get
+
+      # Only real errors fail the build; lints and deprecation notes are reported but allowed.
+      - run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - run: flutter test

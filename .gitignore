@@ -1,0 +1,38 @@
+# ---- Flutter / Dart ----
+.dart_tool/
+.pub-cache/
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+# (pubspec.lock IS committed: this is an app, so builds should be reproducible)
+
+# ---- IDE / OS ----
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ---- Local secrets and per-developer config: NEVER commit these ----
+lib/firebase_options.dart
+lib/core/constants/google_config.dart
+.firebaserc
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+macos/Runner/GoogleService-Info.plist
+android/key.properties
+key.properties
+*.jks
+*.keystore
+.env
+.env.*
+
+# ---- Tooling output ----
+firebase-debug.log*
+firestore-debug.log
+node_modules/
+*.xlsx
+*.apk
+*.aab
